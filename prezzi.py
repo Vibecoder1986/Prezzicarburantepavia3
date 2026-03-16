@@ -2,6 +2,9 @@ import pandas as pd
 import requests
 from io import StringIO
 from datetime import datetime
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ────────────────────────────────────────────────
 #  CONFIG
@@ -18,13 +21,36 @@ TIPI_CARBURANTE_LOWER = [x.lower() for x in TIPI_CARBURANTE]
 print("Inizio ─", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 # ────────────────────────────────────────────────
+# Setup session con retry e timeout alto
+# ────────────────────────────────────────────────
+session = requests.Session()
+retries = Retry(
+    total=5,                  # numero massimo di retry
+    backoff_factor=2,         # attesa: 2s, 4s, 8s, 16s, 32s
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"]
+)
+session.mount('https://', HTTPAdapter(max_retries=retries))
+
+def download_csv(url, timeout=90):
+    print(f"Tentativo download da: {url}")
+    try:
+        response = session.get(url, timeout=timeout)
+        response.raise_for_status()
+        print(f"Download OK - status {response.status_code}, lunghezza {len(response.text):,} char")
+        return response.text
+    except requests.exceptions.RequestException as e:
+        print(f"ERRORE durante il download di {url}: {str(e)}")
+        raise
+
+# ────────────────────────────────────────────────
 #  1. Leggo ANAGRAFICA → solo PV
 # ────────────────────────────────────────────────
 try:
-    r_ana = requests.get(ANAGRAFICA_URL, timeout=25)
-    r_ana.raise_for_status()
+    time.sleep(5)  # piccolo ritardo per evitare picchi simultanei
+    ana_text = download_csv(ANAGRAFICA_URL)
     df_ana = pd.read_csv(
-        StringIO(r_ana.text),
+        StringIO(ana_text),
         sep="|",
         header=None,
         on_bad_lines="skip",
@@ -54,10 +80,9 @@ except Exception as e:
 #  2. Leggo PREZZI
 # ────────────────────────────────────────────────
 try:
-    r_prez = requests.get(PREZZI_URL, timeout=25)
-    r_prez.raise_for_status()
+    prez_text = download_csv(PREZZI_URL)
     df_prez = pd.read_csv(
-        StringIO(r_prez.text),
+        StringIO(prez_text),
         sep="|",
         header=None,
         on_bad_lines="skip",
@@ -107,10 +132,9 @@ df["Servizio"] = df["isSelf"].map({1: "Self", 0: "Servito", "1": "Self", "0": "S
 df = df.sort_values(["Carburante", "Prezzo_num", "Comune", "NomeVisualizzato"])
 
 # ────────────────────────────────────────────────
-#  4. HTML con filtri <select>  (senza titolo e descrizioni lunghe)
+#  4. HTML minimale – senza footer/titolo
 # ────────────────────────────────────────────────
 now = datetime.now()
-ultimo_agg = df["Data"].max() if "Data" in df.columns else "—"
 
 html = f"""<!DOCTYPE html>
 <html lang="it">
@@ -130,7 +154,6 @@ html = f"""<!DOCTYPE html>
     .prezzo {{ font-weight:bold; font-size:1.1em; }}
     .self {{ color:#15803d; font-weight:bold; }}
     .servito {{ color:#b91c1c; font-weight:bold; }}
-    .small {{ font-size:0.85rem; color:#4b5563; }}
     a.coords {{ color:#1d4ed8; text-decoration:none; }}
     a.coords:hover {{ text-decoration:underline; }}
   </style>
@@ -166,7 +189,6 @@ html = f"""<!DOCTYPE html>
   <tbody id="tbody">
 """
 
-# Popoliamo tutte le righe
 for _, r in df.iterrows():
     prezzo = f"{r['Prezzo_num']:.3f}".replace(".", ",")
     coords_link = f"https://www.google.com/maps?q={r['Lat']},{r['Lon']}" if pd.notna(r["Lat"]) and pd.notna(r["Lon"]) else "—"
@@ -185,12 +207,6 @@ for _, r in df.iterrows():
 html += """
   </tbody>
 </table>
-
-<p class="small" style="margin-top:3rem;">
-  Dati MIMIT – Aggiornati alle 8:00 • Ultimo rilevamento: """ + str(ultimo_agg) + """<br>
-  Generato il """ + now.strftime("%d/%m/%Y %H:%M") + """ • 
-  <a href="https://www.mimit.gov.it/it/open-data/elenco-dataset/carburanti-prezzi-praticati-e-anagrafica-degli-impianti">Fonte MIMIT Open Data</a>
-</p>
 
 <script>
 function filtra() {
