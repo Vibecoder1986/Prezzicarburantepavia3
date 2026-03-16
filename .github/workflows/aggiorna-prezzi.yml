@@ -1,0 +1,38 @@
+name: Aggiorna Prezzi Carburanti Pavia
+
+on:
+  schedule:
+    # Ogni giorno alle 8:30 ora italiana = 6:30 UTC (inverno) / 7:30 UTC (estate con DST)
+    # Per coprire entrambi i casi senza workaround complessi, usiamo due slot vicini
+    - cron: '30 6 * * *'   # 6:30 UTC → 7:30 CET (inverno) / 8:30 CEST (estate)
+    - cron: '30 7 * * *'   # 7:30 UTC → 8:30 CET (inverno) / 9:30 CEST (estate)
+  workflow_dispatch:       # Permette di lanciare manualmente dal pulsante "Run workflow"
+
+jobs:
+  aggiorna:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'   # o 3.12 se preferisci
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests
+
+      - name: Esegui script prezzi.py
+        run: python prezzi.py
+
+      - name: Commit & Push se ci sono cambiamenti
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git add prezzi_benzina_pavia.html
+          git commit -m "Aggiornamento automatico prezzi carburanti $(date +'%Y-%m-%d %H:%M')" || echo "Nessun cambiamento"
+          git push
